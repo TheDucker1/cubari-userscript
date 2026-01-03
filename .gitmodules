@@ -1,0 +1,3 @@
+[submodule "cubarimoe"]
+	path = cubarimoe
+	url = https://github.com/subject-f/cubarimoe.git
