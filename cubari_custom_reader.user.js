@@ -6,6 +6,8 @@
 // @author       You
 // @match        *://*/*
 // @grant        GM_registerMenuCommand
+// @grant        GM_setValue
+// @grant        GM_getValue
 // ==/UserScript==
 
 (function() {
@@ -32,8 +34,9 @@
         iframe.style.zIndex = '999999';
         document.body.appendChild(iframe);
 
-        const images = JSON.parse(imagesJSON);
-        
+        // Load saved settings for the reader
+        const savedSettings = GM_getValue('reader_settings', {});
+
         // Construct script content
         // We use a self-invoking function inside the iframe to avoid polluting global scope more than necessary
         const scriptContent = `
@@ -43,6 +46,37 @@
             window.IMAGE_PROXY_URL = "";
             window.version_query = "";
             window.tag = window.tag || (() => {});
+
+            // Shim localStorage to persist settings across domains
+            (function() {
+                try {
+                    const store = ${JSON.stringify(savedSettings)};
+                    const myLocalStorage = {
+                        getItem: function(key) { return store[key] || null; },
+                        setItem: function(key, value) {
+                            store[key] = String(value);
+                            window.parent.postMessage({ type: 'cubari-save-setting', key: key, value: String(value) }, '*');
+                        },
+                        removeItem: function(key) {
+                            delete store[key];
+                            window.parent.postMessage({ type: 'cubari-delete-setting', key: key }, '*');
+                        },
+                        clear: function() {
+                            for (var member in store) delete store[member];
+                        },
+                        key: function(i) { return Object.keys(store)[i] || null; },
+                        get length() { return Object.keys(store).length; }
+                    };
+                    
+                    Object.defineProperty(window, 'localStorage', {
+                        value: myLocalStorage,
+                        writable: true,
+                        configurable: true
+                    });
+                } catch(e) {
+                    console.error("Cubari Reader: Failed to shim localStorage", e);
+                }
+            })();
 
             ${combined_js}
 
@@ -120,6 +154,16 @@
                 activeIframe = null;
             }
         }
+        if (event.data && event.data.type === 'cubari-save-setting') {
+            const settings = GM_getValue('reader_settings', {});
+            settings[event.data.key] = event.data.value;
+            GM_setValue('reader_settings', settings);
+        }
+        if (event.data && event.data.type === 'cubari-delete-setting') {
+            const settings = GM_getValue('reader_settings', {});
+            delete settings[event.data.key];
+            GM_setValue('reader_settings', settings);
+        }
     });
 
     function extractImages(selector) {
@@ -142,8 +186,13 @@
     }
 
     GM_registerMenuCommand("Launch Cubari Reader", () => {
-        const selector = prompt('Enter CSS selector for images (e.g. img, .manga-page):', 'img');
+        const hostname = window.location.hostname;
+        const savedSelector = GM_getValue('selector_' + hostname, 'img');
+        const selector = prompt('Enter CSS selector for images (e.g. img, .manga-page):', savedSelector);
         if (selector) {
+            if (selector !== savedSelector) {
+                GM_setValue('selector_' + hostname, selector);
+            }
             const images = extractImages(selector);
             if (images.length > 0) {
                 startReader(JSON.stringify(images));
